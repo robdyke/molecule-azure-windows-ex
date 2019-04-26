@@ -1,0 +1,22 @@
+---
+dependency:
+  name: galaxy
+driver:
+  name: azure
+lint:
+  name: yamllint
+platforms:
+  - name: instance
+    vm_size: Standard_D2_v3
+provisioner:
+  log: false
+  name: ansible
+  lint:
+    name: ansible-lint
+scenario:
+  name: default
+verifier:
+  name: testinfra
+  enabled: false
+  lint:
+    name: flake8

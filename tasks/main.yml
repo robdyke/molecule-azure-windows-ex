@@ -1,0 +1,6 @@
+---
+# tasks file for molecule-azure-windows-ex
+- name: Install putty
+  win_chocolatey:
+    name: putty.install
+    state: present

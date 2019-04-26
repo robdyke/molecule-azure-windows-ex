@@ -1,0 +1,148 @@
+---
+- name: Create
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  no_log: "{{ not (lookup('env', 'MOLECULE_DEBUG') | bool or molecule_yml.provisioner.log|default(false) | bool) }}"
+  vars:
+    resource_group_name: molecule
+    location: westus
+    user: molecule
+    password: "Password1!"
+    remote_connection: winrm
+    remote_port: 5985
+    virtual_network_name: molecule_vnet
+    subnet_name: molecule_subnet
+    keypair_path: "{{ lookup('env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ssh_key"
+  tasks:
+    - name: Create resource group
+      azure_rm_resourcegroup:
+        name: "{{ resource_group_name }}"
+        location: "{{ location }}"
+
+    - name: Create security group that allows incoming traffic on SSH/HTTP/HTTPS/RDP/WINRM
+      azure_rm_securitygroup:
+        resource_group: "{{ resource_group_name }}"
+        name: "sg{{ virtual_network_name }}"
+        rules:
+          - name: SSH
+            protocol: Tcp
+            destination_port_range: 22
+            access: Allow
+            priority: 101
+            direction: Inbound
+          - name: RDP
+            protocol: Tcp
+            destination_port_range: 3389
+            access: Allow
+            priority: 102
+            direction: Inbound
+          - name: HTTP
+            protocol: Tcp
+            destination_port_range: 80
+            access: Allow
+            priority: 103
+            direction: Inbound
+          - name: HTTPS
+            protocol: Tcp
+            destination_port_range: 443
+            access: Allow
+            priority: 104
+            direction: Inbound
+          - name: WINRM
+            protocol: Tcp
+            destination_port_range: 5985
+            access: Allow
+            priority: 105
+            direction: Inbound
+
+    - name: Create virtual network
+      azure_rm_virtualnetwork:
+        resource_group: "{{ resource_group_name }}"
+        name: "{{ virtual_network_name }}"
+        address_prefixes: "10.10.0.0/16"
+
+    - name: Create subnet
+      azure_rm_subnet:
+        resource_group: "{{ resource_group_name }}"
+        name: "{{ subnet_name }}"
+        security_group: "sg{{ virtual_network_name }}"
+        address_prefix_cidr: 10.10.1.0/24
+        virtual_network_name: "{{ virtual_network_name }}"
+
+    - name: Create molecule instance(s)
+      azure_rm_virtualmachine:
+        resource_group: "{{ resource_group_name }}"
+        name: "{{ item.name }}"
+        vm_size: "{{ item.vm_size }}"
+        admin_username: "{{ user }}"
+        admin_password: "{{ password }}"
+        public_ip_allocation_method: Dynamic
+        os_type: Windows
+        image:
+          publisher: "MicrosoftWindowsServer"
+          offer: "WindowsServer"
+          sku: "2016-Datacenter"
+          version: "latest"
+        open_ports:
+          - "{{ remote_port }}"
+      register: server
+      with_items: "{{ molecule_yml.platforms }}"
+      async: 7200
+      poll: 0
+
+    - name: Wait for instance(s) creation to complete
+      async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: azure_jobs
+      until: azure_jobs.finished
+      retries: 300
+      with_items: "{{ server.results }}"
+
+    - name: Create Windows VM Extension
+      azure_rm_virtualmachine_extension:
+        resource_group: "{{ resource_group_name }}"
+        name: "{{ item.name }}"
+        virtual_machine_name: "{{ item.name }}"
+        publisher: Microsoft.Compute
+        virtual_machine_extension_type: CustomScriptExtension
+        type_handler_version: 1.9
+        settings:
+          CommandToExecute: "powershell -ExecutionPolicy Unrestricted -file provision.ps1"
+          FileUris: [ "https://raw.githubusercontent.com/sperreault/ansible-azure-lab/master/provision.ps1" ]
+      ignore_errors: true
+      with_items: "{{ molecule_yml.platforms }}"
+
+    # Mandatory configuration for Molecule to function.
+
+    - name: Populate instance config dict
+      set_fact:
+        instance_conf_dict: {
+          'instance': "{{ item.ansible_facts.azure_vm.name }}",
+          'address': "{{ item.ansible_facts.azure_vm.properties.networkProfile.networkInterfaces[0].properties.ipConfigurations[0].properties.publicIPAddress.properties.ipAddress }}",
+          'user': "{{ user }}",
+          'port': "{{ remote_port }}",
+          'connection': "{{ remote_connection }}",
+          'identity_file': "{{ keypair_path }}",
+        }
+      with_items: "{{ azure_jobs.results }}"
+      register: instance_config_dict
+      when: server.changed | bool
+
+    - name: Convert instance config dict to a list
+      set_fact:
+        instance_conf: "{{ instance_config_dict.results | map(attribute='ansible_facts.instance_conf_dict') | list }}"
+      when: server.changed | bool
+
+    - name: Dump instance config
+      copy:
+        content: "{{ instance_conf | to_json | from_json | molecule_to_yaml | molecule_header }}"
+        dest: "{{ molecule_instance_config }}"
+      when: server.changed | bool
+
+      # - name: Wait for WINRM
+      # wait_for:
+      #  port: "{{ remote_port }}"
+      #  host: "{{ item.address }}"
+      #  delay: 10
+      # with_items: "{{ lookup('file', molecule_instance_config) | molecule_from_yaml }}"

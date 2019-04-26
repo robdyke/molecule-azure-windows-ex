@@ -1,0 +1,11 @@
+---
+- name: Converge
+  hosts: all
+  vars:
+    ansible_user: "molecule"
+    ansible_password: "Password1!"
+    ansible_port: 5985
+    ansible_connection: winrm
+    ansible_winrm_transport: basic
+  roles:
+    - role: molecule-azure-windows-ex
