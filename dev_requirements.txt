@@ -89,7 +89,7 @@ pytest==4.4.1
 python-dateutil==2.8.0
 python-gilt==1.2.1
 pywinrm==0.3.0
-PyYAML==3.13
+PyYAML==5.4
 requests==2.21.0
 requests-ntlm==1.1.0
 requests-oauthlib==1.2.0
